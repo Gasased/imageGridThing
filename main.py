@@ -82,7 +82,7 @@ class CustomScrollArea(QScrollArea):
             super().wheelEvent(event)
 
 class InteractiveGraphicsView(QGraphicsView):
-    """The view that handles zooming and panning."""
+    # This class remains unchanged
     def __init__(self, scene):
         super().__init__(scene)
         self.setRenderHint(QPainter.Antialiasing)
@@ -124,33 +124,29 @@ class InteractiveGraphicsView(QGraphicsView):
             super().mouseReleaseEvent(event)
             
     def keyPressEvent(self, event: QKeyEvent):
-        """Intercept arrow keys and Escape to prevent default QGraphicsView panning/closing."""
         key = event.key()
         if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right, Qt.Key_Escape):
-            event.ignore() # Let the parent (PreviewWindow) handle these keys
+            event.ignore() 
         else:
             super().keyPressEvent(event)
 
 
 class PreviewWindow(QWidget):
-    """A QWidget container for the interactive view and the footer."""
+    # This class now includes the showEvent fix
     def __init__(self, image_paths, row, col):
         super().__init__()
         self.image_paths = image_paths
         self.current_row = row
         self.current_col = col
 
-        # --- Scene and View setup ---
         self.scene = QGraphicsScene(self)
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
-        self.view = InteractiveGraphicsView(self.scene) # Use our custom view
+        self.view = InteractiveGraphicsView(self.scene)
 
-        # --- Footer Label ---
         self.footer_label = QLabel()
-        self.footer_label.setObjectName("FooterLabel") # For styling
+        self.footer_label.setObjectName("FooterLabel")
         
-        # --- Layout ---
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -158,25 +154,20 @@ class PreviewWindow(QWidget):
         layout.addWidget(self.footer_label)
         self.setLayout(layout)
 
-        # --- Window setup ---
         self.setWindowTitle("Image Preview")
         self.setGeometry(150, 150, 800, 600)
         self.update_image()
 
     def update_image(self):
-        """Loads a new image, updates the footer, and fits the image to the view."""
         path = self.image_paths[self.current_row][self.current_col]
         filename = os.path.basename(path)
         
-        # Load pixmap
         pixmap = QPixmap(path)
         self.pixmap_item.setPixmap(pixmap)
         
-        # Reset view to fit the whole image in view
         self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         self.setWindowTitle(f"Image Preview - {filename}")
 
-        # Update footer
         try:
             steps = int(filename.split("__")[1].split("_")[0])
             left_text = f"Steps: {steps}"
@@ -184,16 +175,16 @@ class PreviewWindow(QWidget):
             left_text = "Steps: N/A"
         
         right_text = "Scroll to zoom; MMB to pan"
-        footer_html = f"""
-            <table width='100%'><tr>
-            <td align='left'>{left_text}</td>
-            <td align='right'>{right_text}</td>
-            </tr></table>
-        """
+        footer_html = f"<table width='100%'><tr><td align='left'>{left_text}</td><td align='right'>{right_text}</td></tr></table>"
         self.footer_label.setText(footer_html)
 
+    def showEvent(self, event):
+        """Called right before the widget is shown for the first time."""
+        # This ensures the initial fit happens after the window has its final size.
+        self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        super().showEvent(event)
+
     def keyPressEvent(self, event: QKeyEvent):
-        """Handle arrow key navigation between images and Escape to close."""
         key = event.key()
         if key == Qt.Key_Right:
             self.current_col = (self.current_col + 1) % len(self.image_paths[self.current_row])
@@ -208,11 +199,9 @@ class PreviewWindow(QWidget):
         elif key == Qt.Key_Escape:
             self.close()
         
-        # When a key is pressed to change image, update it
         self.update_image()
 
     def resizeEvent(self, event: QResizeEvent):
-        """Fit the image to the view when the window is resized."""
         self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         super().resizeEvent(event)
 
