@@ -8,9 +8,12 @@ from PyQt5.QtWidgets import (
     QLabel,
     QScrollArea,
     QVBoxLayout,
+    QGraphicsView,
+    QGraphicsScene,
+    QGraphicsPixmapItem,
 )
-from PyQt5.QtGui import QPixmap, QKeyEvent, QResizeEvent
-from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap, QKeyEvent, QResizeEvent, QPainter
+from PyQt5.QtCore import Qt, QPoint
 
 # --- Dark Theme Stylesheet (unchanged) ---
 dark_stylesheet = """
@@ -20,8 +23,9 @@ dark_stylesheet = """
         font-family: Segoe UI;
         font-size: 10pt;
     }
-    QMainWindow {
+    QMainWindow, QGraphicsView {
         background-color: #2b2b2b;
+        border: none;
     }
     QLabel a {
         color: #3399ff;
@@ -33,7 +37,6 @@ dark_stylesheet = """
     QScrollArea {
         border: none;
     }
-    /* Style for the scrollbars */
     QScrollBar:vertical {
         border: none;
         background: #3c3c3c;
@@ -83,115 +86,142 @@ dark_stylesheet = """
 """
 
 class CustomScrollArea(QScrollArea):
-    """A custom QScrollArea to handle modifier key events for scrolling and zooming."""
+    # This class remains unchanged
     def __init__(self, parent_window, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.parent_window = parent_window
 
     def wheelEvent(self, event):
         modifiers = QApplication.keyboardModifiers()
-        
-        # Ctrl + Scroll for zooming
         if modifiers == Qt.ControlModifier:
             delta = event.angleDelta().y()
-            if delta > 0:
-                self.parent_window.zoom_in()
-            else:
-                self.parent_window.zoom_out()
+            if delta > 0: self.parent_window.zoom_in()
+            else: self.parent_window.zoom_out()
             event.accept()
-        # Shift + Scroll for horizontal scrolling
         elif modifiers == Qt.ShiftModifier:
             h_bar = self.horizontalScrollBar()
-            # Invert the delta for natural horizontal scrolling
             delta = event.angleDelta().y()
             h_bar.setValue(h_bar.value() - delta)
             event.accept()
-        # Default vertical scrolling
         else:
             super().wheelEvent(event)
 
-
-class PreviewWindow(QWidget):
-    # This class remains unchanged
-    def __init__(self, image_grid, row, col):
+class PreviewWindow(QGraphicsView):
+    """A QGraphicsView-based window for interactive image viewing with zoom and pan."""
+    def __init__(self, image_paths, row, col):
         super().__init__()
-        self.image_grid = image_grid
+        self.image_paths = image_paths
         self.current_row = row
         self.current_col = col
 
+        # --- Scene setup ---
+        self.scene = QGraphicsScene(self)
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+        self.setScene(self.scene)
+
+        # --- View settings for better quality and interaction ---
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setRenderHint(QPainter.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # --- Panning state ---
+        self.is_panning = False
+        self.last_mouse_pos = QPoint()
+
+        # --- Window setup ---
         self.setWindowTitle("Image Preview")
         self.setGeometry(150, 150, 800, 600)
-
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
-
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.image_label)
-
         self.update_image()
 
     def update_image(self):
-        image_path = self.image_grid[self.current_row][self.current_col]
-        pixmap = QPixmap(image_path)
-        
-        scaled_pixmap = pixmap.scaled(
-            self.image_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        self.image_label.setPixmap(scaled_pixmap)
-        self.setWindowTitle(f"Image Preview - {os.path.basename(image_path)}")
+        """Loads a new image into the scene and fits it to the view."""
+        path = self.image_paths[self.current_row][self.current_col]
+        pixmap = QPixmap(path)
+        self.pixmap_item.setPixmap(pixmap)
+        self.fitInView(self.pixmap_item, Qt.KeepAspectRatio) # Fit the whole image in view
+        self.setWindowTitle(f"Image Preview - {os.path.basename(path)}")
+
+    def wheelEvent(self, event):
+        """Handle mouse wheel scrolling for zooming."""
+        zoom_factor = 1.15
+        if event.angleDelta().y() > 0:
+            self.scale(zoom_factor, zoom_factor)
+        else:
+            self.scale(1 / zoom_factor, 1 / zoom_factor)
+
+    def mousePressEvent(self, event):
+        """Start panning if the middle mouse button is pressed."""
+        if event.button() == Qt.MiddleButton:
+            self.is_panning = True
+            self.last_mouse_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Pan the view if panning is active."""
+        if self.is_panning:
+            delta = event.pos() - self.last_mouse_pos
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self.last_mouse_pos = event.pos()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Stop panning when the middle mouse button is released."""
+        if event.button() == Qt.MiddleButton:
+            self.is_panning = False
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent):
+        """Handle arrow key navigation between images."""
         key = event.key()
-
         if key == Qt.Key_Right:
-            self.current_col = (self.current_col + 1) % len(
-                self.image_grid[self.current_row]
-            )
+            self.current_col = (self.current_col + 1) % len(self.image_paths[self.current_row])
         elif key == Qt.Key_Left:
-            self.current_col = (
-                self.current_col - 1 + len(self.image_grid[self.current_row])
-            ) % len(self.image_grid[self.current_row])
+            self.current_col = (self.current_col - 1 + len(self.image_paths[self.current_row])) % len(self.image_paths[self.current_row])
         elif key == Qt.Key_Down:
-            self.current_row = (self.current_row + 1) % len(self.image_grid)
-            self.current_col = min(
-                self.current_col, len(self.image_grid[self.current_row]) - 1
-            )
+            self.current_row = (self.current_row + 1) % len(self.image_paths)
+            self.current_col = min(self.current_col, len(self.image_paths[self.current_row]) - 1)
         elif key == Qt.Key_Up:
-            self.current_row = (
-                self.current_row - 1 + len(self.image_grid)
-            ) % len(self.image_grid)
-            self.current_col = min(
-                self.current_col, len(self.image_grid[self.current_row]) - 1
-            )
+            self.current_row = (self.current_row - 1 + len(self.image_paths)) % len(self.image_paths)
+            self.current_col = min(self.current_col, len(self.image_paths[self.current_row]) - 1)
         elif key == Qt.Key_Escape:
             self.close()
-
+        
+        # When a key is pressed to change image, update it
         self.update_image()
 
     def resizeEvent(self, event: QResizeEvent):
-        self.update_image()
+        """Fit the image to the view when the window is resized."""
+        self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        super().resizeEvent(event)
 
 
 class ImageGrid(QMainWindow):
-    # Constants for zooming
+    # --- This class is largely unchanged, only the constants have been moved ---
     MIN_THUMBNAIL_SIZE = 40
     MAX_THUMBNAIL_SIZE = 500
     ZOOM_STEP = 20
 
     def __init__(self):
         super().__init__()
-
         self.setWindowTitle("Image Grid Viewer")
         self.setGeometry(100, 100, 1200, 800)
         self.setAcceptDrops(True)
-
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
-
         self.welcome_label = QLabel()
         self.welcome_label.setText(
             """
@@ -214,89 +244,62 @@ class ImageGrid(QMainWindow):
         self.welcome_label.setWordWrap(True)
         self.welcome_label.setOpenExternalLinks(True)
         self.layout.addWidget(self.welcome_label)
-
-        # Use our custom scroll area
         self.scroll_area = CustomScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.layout.addWidget(self.scroll_area)
-
         self.grid_widget = QWidget()
         self.grid_layout = QGridLayout(self.grid_widget)
         self.scroll_area.setWidget(self.grid_widget)
-
-        # Initialize state
         self.scroll_area.hide()
         self.thumbnail_size = 150
-        self.image_paths = [] # 2D list of image paths
-        self.thumbnail_labels = [] # 2D list of QLabel widgets
-        self.pixmap_cache = [] # 2D list of QPixmap objects for performance
+        self.image_paths = []
+        self.thumbnail_labels = []
+        self.pixmap_cache = []
         self.preview_window = None
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.accept()
-        else:
-            event.ignore()
+        if event.mimeData().hasUrls(): event.accept()
+        else: event.ignore()
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
         if urls and urls[0].isLocalFile():
             path = urls[0].toLocalFile()
-            if os.path.isdir(path):
-                self.load_images(path)
+            if os.path.isdir(path): self.load_images(path)
 
     def load_images(self, folder_path):
         self.welcome_label.hide()
         self.scroll_area.show()
-
-        # Clear previous widgets and data
         for i in reversed(range(self.grid_layout.count())):
             widget = self.grid_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
-        self.thumbnail_labels.clear()
-        self.pixmap_cache.clear()
-        self.image_paths.clear()
-
-        image_files = sorted(
-            [f for f in os.listdir(folder_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
-        )
-
+            if widget: widget.setParent(None)
+        self.thumbnail_labels.clear(); self.pixmap_cache.clear(); self.image_paths.clear()
+        image_files = sorted([f for f in os.listdir(folder_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))])
         images_by_steps = {}
         for filename in image_files:
             try:
                 steps = int(filename.split("__")[1].split("_")[0])
-                if steps not in images_by_steps:
-                    images_by_steps[steps] = []
+                if steps not in images_by_steps: images_by_steps[steps] = []
                 images_by_steps[steps].append(os.path.join(folder_path, filename))
-            except (IndexError, ValueError):
-                pass
-
+            except (IndexError, ValueError): pass
         self.image_paths = [images_by_steps[steps] for steps in sorted(images_by_steps)]
-
-        # Populate grid and caches
         for row_idx, row_paths in enumerate(self.image_paths):
             label_row, pixmap_row = [], []
             for col_idx, path in enumerate(row_paths):
-                # Cache the pixmap for fast zooming
                 pixmap = QPixmap(path)
                 pixmap_row.append(pixmap)
-                
                 label = QLabel()
                 label.setAlignment(Qt.AlignCenter)
                 label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 label.mousePressEvent = lambda event, r=row_idx, c=col_idx: self.open_preview(r, c)
-                
                 self.grid_layout.addWidget(label, row_idx, col_idx)
                 label_row.append(label)
             self.thumbnail_labels.append(label_row)
             self.pixmap_cache.append(pixmap_row)
 
     def update_thumbnail_sizes(self):
-        """Iterate through all labels and update their pixmap size."""
         for row_idx, row_labels in enumerate(self.thumbnail_labels):
             for col_idx, label in enumerate(row_labels):
-                # Use the cached pixmap to create a new scaled version
                 pixmap = self.pixmap_cache[row_idx][col_idx]
                 label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
@@ -314,11 +317,9 @@ class ImageGrid(QMainWindow):
         self.preview_window = PreviewWindow(self.image_paths, row, col)
         self.preview_window.show()
 
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet(dark_stylesheet)
-    
     main_window = ImageGrid()
     main_window.show()
     sys.exit(app.exec_())
