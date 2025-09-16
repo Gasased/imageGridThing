@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QKeyEvent, QResizeEvent
 from PyQt5.QtCore import Qt
 
-# --- Dark Theme Stylesheet ---
+# --- Dark Theme Stylesheet (unchanged) ---
 dark_stylesheet = """
     QWidget {
         background-color: #2b2b2b;
@@ -82,8 +82,37 @@ dark_stylesheet = """
     }
 """
 
+class CustomScrollArea(QScrollArea):
+    """A custom QScrollArea to handle modifier key events for scrolling and zooming."""
+    def __init__(self, parent_window, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.parent_window = parent_window
+
+    def wheelEvent(self, event):
+        modifiers = QApplication.keyboardModifiers()
+        
+        # Ctrl + Scroll for zooming
+        if modifiers == Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.parent_window.zoom_in()
+            else:
+                self.parent_window.zoom_out()
+            event.accept()
+        # Shift + Scroll for horizontal scrolling
+        elif modifiers == Qt.ShiftModifier:
+            h_bar = self.horizontalScrollBar()
+            # Invert the delta for natural horizontal scrolling
+            delta = event.angleDelta().y()
+            h_bar.setValue(h_bar.value() - delta)
+            event.accept()
+        # Default vertical scrolling
+        else:
+            super().wheelEvent(event)
+
 
 class PreviewWindow(QWidget):
+    # This class remains unchanged
     def __init__(self, image_grid, row, col):
         super().__init__()
         self.image_grid = image_grid
@@ -147,6 +176,11 @@ class PreviewWindow(QWidget):
 
 
 class ImageGrid(QMainWindow):
+    # Constants for zooming
+    MIN_THUMBNAIL_SIZE = 40
+    MAX_THUMBNAIL_SIZE = 500
+    ZOOM_STEP = 20
+
     def __init__(self):
         super().__init__()
 
@@ -156,10 +190,8 @@ class ImageGrid(QMainWindow):
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-
         self.layout = QVBoxLayout(self.central_widget)
 
-        # --- Welcome Screen Label ---
         self.welcome_label = QLabel()
         self.welcome_label.setText(
             """
@@ -167,6 +199,9 @@ class ImageGrid(QMainWindow):
                 <h1 style='font-size: 24pt; color: #ffffff;'>Image Grid Viewer</h1>
                 <p style='font-size: 12pt; color: #aaaaaa;'>
                     Drag and drop a folder containing your images to begin.
+                </p>
+                <p style='font-size: 11pt; color: #888888;'>
+                    Use <b>Ctrl + Scroll</b> to zoom and <b>Shift + Scroll</b> to scroll horizontally.
                 </p>
                 <p style='font-size: 11pt; color: #888888;'>
                     For example, the <b>samples</b> folder from 
@@ -177,11 +212,11 @@ class ImageGrid(QMainWindow):
         )
         self.welcome_label.setAlignment(Qt.AlignCenter)
         self.welcome_label.setWordWrap(True)
-        self.welcome_label.setOpenExternalLinks(True) # Make hyperlink clickable
+        self.welcome_label.setOpenExternalLinks(True)
         self.layout.addWidget(self.welcome_label)
 
-        # --- Scroll Area for the Grid ---
-        self.scroll_area = QScrollArea()
+        # Use our custom scroll area
+        self.scroll_area = CustomScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.layout.addWidget(self.scroll_area)
 
@@ -189,9 +224,12 @@ class ImageGrid(QMainWindow):
         self.grid_layout = QGridLayout(self.grid_widget)
         self.scroll_area.setWidget(self.grid_widget)
 
-        # --- Initial State ---
-        self.scroll_area.hide() # Hide grid initially
-        self.image_grid = []
+        # Initialize state
+        self.scroll_area.hide()
+        self.thumbnail_size = 150
+        self.image_paths = [] # 2D list of image paths
+        self.thumbnail_labels = [] # 2D list of QLabel widgets
+        self.pixmap_cache = [] # 2D list of QPixmap objects for performance
         self.preview_window = None
 
     def dragEnterEvent(self, event):
@@ -201,26 +239,27 @@ class ImageGrid(QMainWindow):
             event.ignore()
 
     def dropEvent(self, event):
-        files = [u.toLocalFile() for u in event.mimeData().urls()]
-        if files and os.path.isdir(files[0]):
-            self.load_images(files[0])
+        urls = event.mimeData().urls()
+        if urls and urls[0].isLocalFile():
+            path = urls[0].toLocalFile()
+            if os.path.isdir(path):
+                self.load_images(path)
 
     def load_images(self, folder_path):
-        # --- Switch from Welcome Screen to Grid View ---
         self.welcome_label.hide()
         self.scroll_area.show()
 
+        # Clear previous widgets and data
         for i in reversed(range(self.grid_layout.count())):
-            widget_to_remove = self.grid_layout.itemAt(i).widget()
-            if widget_to_remove:
-                widget_to_remove.setParent(None)
+            widget = self.grid_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+        self.thumbnail_labels.clear()
+        self.pixmap_cache.clear()
+        self.image_paths.clear()
 
         image_files = sorted(
-            [
-                f
-                for f in os.listdir(folder_path)
-                if f.lower().endswith((".png", ".jpg", ".jpeg"))
-            ]
+            [f for f in os.listdir(folder_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
         )
 
         images_by_steps = {}
@@ -233,28 +272,46 @@ class ImageGrid(QMainWindow):
             except (IndexError, ValueError):
                 pass
 
-        self.image_grid = [
-            images_by_steps[steps] for steps in sorted(images_by_steps)
-        ]
+        self.image_paths = [images_by_steps[steps] for steps in sorted(images_by_steps)]
 
-        for row_idx, row_images in enumerate(self.image_grid):
-            for col_idx, path in enumerate(row_images):
-                thumbnail_label = QLabel()
+        # Populate grid and caches
+        for row_idx, row_paths in enumerate(self.image_paths):
+            label_row, pixmap_row = [], []
+            for col_idx, path in enumerate(row_paths):
+                # Cache the pixmap for fast zooming
                 pixmap = QPixmap(path)
-                thumbnail_label.setPixmap(
-                    pixmap.scaled(
-                        150, 150, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                    )
-                )
-                thumbnail_label.setAlignment(Qt.AlignCenter)
+                pixmap_row.append(pixmap)
                 
-                thumbnail_label.mousePressEvent = (
-                    lambda event, r=row_idx, c=col_idx: self.open_preview(r, c)
-                )
-                self.grid_layout.addWidget(thumbnail_label, row_idx, col_idx)
+                label = QLabel()
+                label.setAlignment(Qt.AlignCenter)
+                label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                label.mousePressEvent = lambda event, r=row_idx, c=col_idx: self.open_preview(r, c)
+                
+                self.grid_layout.addWidget(label, row_idx, col_idx)
+                label_row.append(label)
+            self.thumbnail_labels.append(label_row)
+            self.pixmap_cache.append(pixmap_row)
+
+    def update_thumbnail_sizes(self):
+        """Iterate through all labels and update their pixmap size."""
+        for row_idx, row_labels in enumerate(self.thumbnail_labels):
+            for col_idx, label in enumerate(row_labels):
+                # Use the cached pixmap to create a new scaled version
+                pixmap = self.pixmap_cache[row_idx][col_idx]
+                label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def zoom_in(self):
+        if self.thumbnail_labels:
+            self.thumbnail_size = min(self.MAX_THUMBNAIL_SIZE, self.thumbnail_size + self.ZOOM_STEP)
+            self.update_thumbnail_sizes()
+
+    def zoom_out(self):
+        if self.thumbnail_labels:
+            self.thumbnail_size = max(self.MIN_THUMBNAIL_SIZE, self.thumbnail_size - self.ZOOM_STEP)
+            self.update_thumbnail_sizes()
 
     def open_preview(self, row, col):
-        self.preview_window = PreviewWindow(self.image_grid, row, col)
+        self.preview_window = PreviewWindow(self.image_paths, row, col)
         self.preview_window.show()
 
 
