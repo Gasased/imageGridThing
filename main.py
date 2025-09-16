@@ -27,6 +27,13 @@ dark_stylesheet = """
         background-color: #2b2b2b;
         border: none;
     }
+    QLabel#FooterLabel {
+        color: #aaaaaa;
+        font-size: 9pt;
+        padding: 4px 8px;
+        background-color: #222222;
+        border-top: 1px solid #3c3c3c;
+    }
     QLabel a {
         color: #3399ff;
         text-decoration: none;
@@ -38,51 +45,19 @@ dark_stylesheet = """
         border: none;
     }
     QScrollBar:vertical {
-        border: none;
-        background: #3c3c3c;
-        width: 14px;
-        margin: 15px 0 15px 0;
-        border-radius: 7px;
+        border: none; background: #3c3c3c; width: 14px; margin: 15px 0 15px 0; border-radius: 7px;
     }
-    QScrollBar::handle:vertical {
-        background-color: #5a5a5a;
-        min-height: 30px;
-        border-radius: 7px;
-    }
-    QScrollBar::handle:vertical:hover {
-        background-color: #6a6a6a;
-    }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-        height: 15px;
-        border: none;
-        background: none;
-    }
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-        background: none;
-    }
+    QScrollBar::handle:vertical { background-color: #5a5a5a; min-height: 30px; border-radius: 7px; }
+    QScrollBar::handle:vertical:hover { background-color: #6a6a6a; }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 15px; border: none; background: none; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
     QScrollBar:horizontal {
-        border: none;
-        background: #3c3c3c;
-        height: 14px;
-        margin: 0 15px 0 15px;
-        border-radius: 7px;
+        border: none; background: #3c3c3c; height: 14px; margin: 0 15px 0 15px; border-radius: 7px;
     }
-    QScrollBar::handle:horizontal {
-        background-color: #5a5a5a;
-        min-width: 30px;
-        border-radius: 7px;
-    }
-    QScrollBar::handle:horizontal:hover {
-        background-color: #6a6a6a;
-    }
-    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-        width: 15px;
-        border: none;
-        background: none;
-    }
-    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-        background: none;
-    }
+    QScrollBar::handle:horizontal { background-color: #5a5a5a; min-width: 30px; border-radius: 7px; }
+    QScrollBar::handle:horizontal:hover { background-color: #6a6a6a; }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 15px; border: none; background: none; }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
 """
 
 class CustomScrollArea(QScrollArea):
@@ -106,31 +81,82 @@ class CustomScrollArea(QScrollArea):
         else:
             super().wheelEvent(event)
 
-class PreviewWindow(QGraphicsView):
-    """A QGraphicsView-based window for interactive image viewing with zoom and pan."""
-    def __init__(self, image_paths, row, col):
-        super().__init__()
-        self.image_paths = image_paths
-        self.current_row = row
-        self.current_col = col
-
-        # --- Scene setup ---
-        self.scene = QGraphicsScene(self)
-        self.pixmap_item = QGraphicsPixmapItem()
-        self.scene.addItem(self.pixmap_item)
-        self.setScene(self.scene)
-
-        # --- View settings for better quality and interaction ---
+class InteractiveGraphicsView(QGraphicsView):
+    """The view that handles zooming and panning."""
+    def __init__(self, scene):
+        super().__init__(scene)
         self.setRenderHint(QPainter.Antialiasing)
         self.setRenderHint(QPainter.SmoothPixmapTransform)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        # --- Panning state ---
         self.is_panning = False
         self.last_mouse_pos = QPoint()
+
+    def wheelEvent(self, event):
+        zoom_factor = 1.15
+        if event.angleDelta().y() > 0: self.scale(zoom_factor, zoom_factor)
+        else: self.scale(1 / zoom_factor, 1 / zoom_factor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MiddleButton:
+            self.is_panning = True
+            self.last_mouse_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.is_panning:
+            delta = event.pos() - self.last_mouse_pos
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self.last_mouse_pos = event.pos()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MiddleButton:
+            self.is_panning = False
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            super().mouseReleaseEvent(event)
+            
+    def keyPressEvent(self, event: QKeyEvent):
+        """Intercept arrow keys and Escape to prevent default QGraphicsView panning/closing."""
+        key = event.key()
+        if key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right, Qt.Key_Escape):
+            event.ignore() # Let the parent (PreviewWindow) handle these keys
+        else:
+            super().keyPressEvent(event)
+
+
+class PreviewWindow(QWidget):
+    """A QWidget container for the interactive view and the footer."""
+    def __init__(self, image_paths, row, col):
+        super().__init__()
+        self.image_paths = image_paths
+        self.current_row = row
+        self.current_col = col
+
+        # --- Scene and View setup ---
+        self.scene = QGraphicsScene(self)
+        self.pixmap_item = QGraphicsPixmapItem()
+        self.scene.addItem(self.pixmap_item)
+        self.view = InteractiveGraphicsView(self.scene) # Use our custom view
+
+        # --- Footer Label ---
+        self.footer_label = QLabel()
+        self.footer_label.setObjectName("FooterLabel") # For styling
+        
+        # --- Layout ---
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.view)
+        layout.addWidget(self.footer_label)
+        self.setLayout(layout)
 
         # --- Window setup ---
         self.setWindowTitle("Image Preview")
@@ -138,53 +164,36 @@ class PreviewWindow(QGraphicsView):
         self.update_image()
 
     def update_image(self):
-        """Loads a new image into the scene and fits it to the view."""
+        """Loads a new image, updates the footer, and fits the image to the view."""
         path = self.image_paths[self.current_row][self.current_col]
+        filename = os.path.basename(path)
+        
+        # Load pixmap
         pixmap = QPixmap(path)
         self.pixmap_item.setPixmap(pixmap)
-        self.fitInView(self.pixmap_item, Qt.KeepAspectRatio) # Fit the whole image in view
-        self.setWindowTitle(f"Image Preview - {os.path.basename(path)}")
+        
+        # Reset view to fit the whole image in view
+        self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        self.setWindowTitle(f"Image Preview - {filename}")
 
-    def wheelEvent(self, event):
-        """Handle mouse wheel scrolling for zooming."""
-        zoom_factor = 1.15
-        if event.angleDelta().y() > 0:
-            self.scale(zoom_factor, zoom_factor)
-        else:
-            self.scale(1 / zoom_factor, 1 / zoom_factor)
-
-    def mousePressEvent(self, event):
-        """Start panning if the middle mouse button is pressed."""
-        if event.button() == Qt.MiddleButton:
-            self.is_panning = True
-            self.last_mouse_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Pan the view if panning is active."""
-        if self.is_panning:
-            delta = event.pos() - self.last_mouse_pos
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-            self.last_mouse_pos = event.pos()
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        """Stop panning when the middle mouse button is released."""
-        if event.button() == Qt.MiddleButton:
-            self.is_panning = False
-            self.setCursor(Qt.ArrowCursor)
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
+        # Update footer
+        try:
+            steps = int(filename.split("__")[1].split("_")[0])
+            left_text = f"Steps: {steps}"
+        except (IndexError, ValueError):
+            left_text = "Steps: N/A"
+        
+        right_text = "Scroll to zoom; MMB to pan"
+        footer_html = f"""
+            <table width='100%'><tr>
+            <td align='left'>{left_text}</td>
+            <td align='right'>{right_text}</td>
+            </tr></table>
+        """
+        self.footer_label.setText(footer_html)
 
     def keyPressEvent(self, event: QKeyEvent):
-        """Handle arrow key navigation between images."""
+        """Handle arrow key navigation between images and Escape to close."""
         key = event.key()
         if key == Qt.Key_Right:
             self.current_col = (self.current_col + 1) % len(self.image_paths[self.current_row])
@@ -204,57 +213,34 @@ class PreviewWindow(QGraphicsView):
 
     def resizeEvent(self, event: QResizeEvent):
         """Fit the image to the view when the window is resized."""
-        self.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         super().resizeEvent(event)
 
 
 class ImageGrid(QMainWindow):
-    # --- This class is largely unchanged, only the constants have been moved ---
-    MIN_THUMBNAIL_SIZE = 40
-    MAX_THUMBNAIL_SIZE = 500
-    ZOOM_STEP = 20
+    # This class is unchanged from the previous version
+    MIN_THUMBNAIL_SIZE, MAX_THUMBNAIL_SIZE, ZOOM_STEP = 40, 500, 20
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Image Grid Viewer")
-        self.setGeometry(100, 100, 1200, 800)
-        self.setAcceptDrops(True)
-        self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
+        self.setWindowTitle("Image Grid Viewer"); self.setGeometry(100, 100, 1200, 800); self.setAcceptDrops(True)
+        self.central_widget = QWidget(); self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
         self.welcome_label = QLabel()
         self.welcome_label.setText(
-            """
-            <div style='text-align: center;'>
-                <h1 style='font-size: 24pt; color: #ffffff;'>Image Grid Viewer</h1>
-                <p style='font-size: 12pt; color: #aaaaaa;'>
-                    Drag and drop a folder containing your images to begin.
-                </p>
-                <p style='font-size: 11pt; color: #888888;'>
-                    Use <b>Ctrl + Scroll</b> to zoom and <b>Shift + Scroll</b> to scroll horizontally.
-                </p>
-                <p style='font-size: 11pt; color: #888888;'>
-                    For example, the <b>samples</b> folder from 
-                    <a href='https://github.com/ostris/ai-toolkit'>Ostris's AI-Toolkit</a>.
-                </p>
-            </div>
-            """
-        )
-        self.welcome_label.setAlignment(Qt.AlignCenter)
-        self.welcome_label.setWordWrap(True)
-        self.welcome_label.setOpenExternalLinks(True)
+            """<div style='text-align: center;'><h1 style='font-size: 24pt;'>Image Grid Viewer</h1>
+               <p style='font-size: 12pt; color: #aaaaaa;'>Drag and drop a folder to begin.</p>
+               <p style='font-size: 11pt; color: #888888;'>Use <b>Ctrl+Scroll</b> to zoom thumbnails and <b>Shift+Scroll</b> to scroll horizontally.</p>
+               <p style='font-size: 11pt; color: #888888;'>Example folder: <b>samples</b> from <a href='https://github.com/ostris/ai-toolkit'>Ostris's AI-Toolkit</a>.</p></div>""")
+        self.welcome_label.setAlignment(Qt.AlignCenter); self.welcome_label.setWordWrap(True); self.welcome_label.setOpenExternalLinks(True)
         self.layout.addWidget(self.welcome_label)
-        self.scroll_area = CustomScrollArea(self)
-        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area = CustomScrollArea(self); self.scroll_area.setWidgetResizable(True)
         self.layout.addWidget(self.scroll_area)
-        self.grid_widget = QWidget()
-        self.grid_layout = QGridLayout(self.grid_widget)
+        self.grid_widget = QWidget(); self.grid_layout = QGridLayout(self.grid_widget)
         self.scroll_area.setWidget(self.grid_widget)
         self.scroll_area.hide()
         self.thumbnail_size = 150
-        self.image_paths = []
-        self.thumbnail_labels = []
-        self.pixmap_cache = []
+        self.image_paths = []; self.thumbnail_labels = []; self.pixmap_cache = []
         self.preview_window = None
 
     def dragEnterEvent(self, event):
@@ -268,8 +254,7 @@ class ImageGrid(QMainWindow):
             if os.path.isdir(path): self.load_images(path)
 
     def load_images(self, folder_path):
-        self.welcome_label.hide()
-        self.scroll_area.show()
+        self.welcome_label.hide(); self.scroll_area.show()
         for i in reversed(range(self.grid_layout.count())):
             widget = self.grid_layout.itemAt(i).widget()
             if widget: widget.setParent(None)
@@ -283,24 +268,20 @@ class ImageGrid(QMainWindow):
                 images_by_steps[steps].append(os.path.join(folder_path, filename))
             except (IndexError, ValueError): pass
         self.image_paths = [images_by_steps[steps] for steps in sorted(images_by_steps)]
-        for row_idx, row_paths in enumerate(self.image_paths):
+        for r, row_paths in enumerate(self.image_paths):
             label_row, pixmap_row = [], []
-            for col_idx, path in enumerate(row_paths):
-                pixmap = QPixmap(path)
-                pixmap_row.append(pixmap)
-                label = QLabel()
-                label.setAlignment(Qt.AlignCenter)
+            for c, path in enumerate(row_paths):
+                pixmap = QPixmap(path); pixmap_row.append(pixmap)
+                label = QLabel(); label.setAlignment(Qt.AlignCenter)
                 label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                label.mousePressEvent = lambda event, r=row_idx, c=col_idx: self.open_preview(r, c)
-                self.grid_layout.addWidget(label, row_idx, col_idx)
-                label_row.append(label)
-            self.thumbnail_labels.append(label_row)
-            self.pixmap_cache.append(pixmap_row)
+                label.mousePressEvent = lambda e, r=r, c=c: self.open_preview(r, c)
+                self.grid_layout.addWidget(label, r, c); label_row.append(label)
+            self.thumbnail_labels.append(label_row); self.pixmap_cache.append(pixmap_row)
 
     def update_thumbnail_sizes(self):
-        for row_idx, row_labels in enumerate(self.thumbnail_labels):
-            for col_idx, label in enumerate(row_labels):
-                pixmap = self.pixmap_cache[row_idx][col_idx]
+        for r, row in enumerate(self.thumbnail_labels):
+            for c, label in enumerate(row):
+                pixmap = self.pixmap_cache[r][c]
                 label.setPixmap(pixmap.scaled(self.thumbnail_size, self.thumbnail_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def zoom_in(self):
