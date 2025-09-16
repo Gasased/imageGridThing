@@ -132,7 +132,7 @@ class InteractiveGraphicsView(QGraphicsView):
 
 
 class PreviewWindow(QWidget):
-    # This class now includes the showEvent fix
+    # The update_image method is modified here
     def __init__(self, image_paths, row, col):
         super().__init__()
         self.image_paths = image_paths
@@ -168,19 +168,22 @@ class PreviewWindow(QWidget):
         self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         self.setWindowTitle(f"Image Preview - {filename}")
 
+        # --- Footer Text Generation (Modified Here) ---
         try:
             steps = int(filename.split("__")[1].split("_")[0])
-            left_text = f"Steps: {steps}"
+            steps_text = f"Steps: {steps}"
         except (IndexError, ValueError):
-            left_text = "Steps: N/A"
+            steps_text = "Steps: N/A"
         
+        image_index_text = f"Image: {self.current_col}"
+        
+        left_text = f"{steps_text} &nbsp;|&nbsp; {image_index_text}" # &nbsp; is a non-breaking space for nice padding
         right_text = "Scroll to zoom; MMB to pan"
+        
         footer_html = f"<table width='100%'><tr><td align='left'>{left_text}</td><td align='right'>{right_text}</td></tr></table>"
         self.footer_label.setText(footer_html)
 
     def showEvent(self, event):
-        """Called right before the widget is shown for the first time."""
-        # This ensures the initial fit happens after the window has its final size.
         self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         super().showEvent(event)
 
@@ -207,7 +210,7 @@ class PreviewWindow(QWidget):
 
 
 class ImageGrid(QMainWindow):
-    # This class is unchanged from the previous version
+    # This class is unchanged
     MIN_THUMBNAIL_SIZE, MAX_THUMBNAIL_SIZE, ZOOM_STEP = 40, 500, 20
 
     def __init__(self):
